@@ -106,6 +106,8 @@ class EP_API {
 		$url = $index_url . '/post/_search';
 
 		$request = wp_remote_request( $url, array( 'body' => json_encode( $args ), 'method' => 'POST' ) );
+		ep_log_query( $args, $index );
+
 
 		if ( ! is_wp_error( $request ) ) {
 
@@ -695,6 +697,25 @@ class EP_API {
 		return false;
 	}
 
+	public function create_index( $index_name ) {
+		$index_url = trailingslashit( EP_HOST ) . trailingslashit( $index_name );
+
+		$request = wp_remote_request( $index_url, array( 'method' => 'PUT' ) );
+
+		$return_code = wp_remote_retrieve_response_code( $request );
+		if ( ! is_wp_error( $request ) ) {
+			if ( 200 === $return_code ) {
+				return true;
+			} elseif ( 400 === $return_code && strpos( wp_remote_retrieve_body( $request ), "IndexAlreadyExistsException" ) !== false ) {
+				// Index already exists
+				return true;
+			}
+
+		}
+
+		return false;
+	}
+
 	/**
 	 * Format WP query args for ES
 	 *
@@ -1253,6 +1274,122 @@ class EP_API {
 
 		return $index_exists;
 	}
+
+	public function get_stats() {
+		// _cat is not JSON
+		$url =  untrailingslashit( EP_HOST ) . '/_cat/indices?v';
+
+		$request = wp_remote_get( $url );
+
+		if ( ! is_wp_error( $request ) ) {
+			$response_body = wp_remote_retrieve_body( $request );
+
+			return $response_body;
+
+		}
+
+		return false;
+	}
+
+	/**
+	 * Get array of all indexes.
+	 * @return array
+	 */
+	public function get_analytics_index_names() {
+		$indices = array();
+
+		if ( is_multisite() ) {
+			$indices[] = ep_get_network_alias() . ep_get_analytics_index_identifier();
+			foreach ( ep_get_sites() as $site ) {
+				switch_to_blog( $site['blog_id'] );
+
+				$indices[] = ep_get_analytics_index_name();
+
+				restore_current_blog();
+			}
+		} else {
+			$indices[] = ep_get_analytics_index_name();
+		}
+
+		return $indices;
+	}
+
+	public function create_analytics_indices() {
+		$success = true;
+		foreach( $this->get_analytics_index_names() as $index_name ) {
+			if ( ! $this->create_index( $index_name ) ) {
+				$success = false;
+			}
+		}
+		return $success;
+
+	}
+
+	public function get_frequent_searches( $num_days = 7 ) {
+		$results = array( '_days' => intval( $num_days ) );
+		$date = new DateTime();
+		$date->modify('- ' . intval( $num_days ) . ' days');
+		foreach ( ep_get_analytics_indices() as $index ) {
+			$query = '
+				{
+					"query" : {
+						"filtered" : {
+							"filter" : {
+								"range" : {
+									"date" : {
+										"gte" : "' . $date->format( 'Y-m-d\TH:i:s' ) . '"
+									}
+								}
+							},
+							"query" : {
+								"match_all" : {}
+							}
+						}
+					},
+						"facets": {
+						"keywords": {
+							"terms": {
+								"field": "query"
+							}
+						}
+					}
+				} ';
+
+			$index_url = trailingslashit( EP_HOST ) . trailingslashit( $index ) . "query/_search";
+			$request = wp_remote_request( $index_url, array( 'method' => 'POST', 'body' => $query ) );
+
+			if (200 === wp_remote_retrieve_response_code( $request ) ) {
+				$response = wp_remote_retrieve_body( $request );
+				$response = json_decode( $response, true );
+				if ( isset( $response[ 'facets' ] ) && isset( $response[ 'facets' ][ 'keywords' ] ) ) {
+					$results[ $index ] = $response[ 'facets' ][ 'keywords' ];
+				}
+
+			}
+
+		}
+		return $results;
+	}
+
+	public function log_query( $query_args, $index ) {
+		if ( null === $index ) {
+			$index = ep_get_analytics_index_name();
+		}
+		foreach( array( 'query','bool', 'should', 0, 'multi_match', 'query') as $key ) {
+			if ( isset( $query_args[$key] ) ) {
+				$query_args = $query_args[$key];
+			}
+		}
+
+		// $query_args should now contain the search term
+		if ( is_string( $query_args ) && strlen( $query_args ) ) {
+			$index_url = trailingslashit( EP_HOST ) . trailingslashit( $index ) . "query";
+			$date = new DateTime();
+			$body = array( 'query' => $query_args, 'date' => $date->format( 'Y-m-d\TH:i:s' ) );
+			$request = wp_remote_request( $index_url, array( 'method' => 'POST', 'body' => json_encode( $body ) ) );
+		}
+
+	}
 }
 
 EP_API::factory();
@@ -1335,4 +1472,25 @@ function ep_elasticsearch_alive() {
 
 function ep_index_exists() {
 	return EP_API::factory()->index_exists();
+}
+
+function ep_get_stats() {
+	return EP_API::factory()->get_stats();
+}
+
+function ep_create_analytics_indices() {
+	return EP_API::factory()->create_analytics_indices();
+}
+
+function ep_get_analytics_indices() {
+	return EP_API::factory()->get_analytics_index_names();
+}
+
+function ep_get_frequent_searches() {
+	return EP_API::factory()->get_frequent_searches();
+
+}
+
+function ep_log_query( $query_args, $index ) {
+	return EP_API::factory()->log_query( $query_args, $index );
 }

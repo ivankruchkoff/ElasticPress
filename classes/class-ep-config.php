@@ -42,6 +42,10 @@ class EP_Config {
 		return apply_filters( 'ep_index_name', $index_name );
 	}
 
+	public function get_analytics_index_name( $blog_id = null ) {
+		return $this->get_index_name( $blog_id ) . $this->get_analytics_index_identifier();
+	}
+
 	/**
 	 * Returns the index url given an index name. Defaults to current index
 	 *
@@ -86,6 +90,10 @@ class EP_Config {
 
 		return apply_filters( 'ep_global_alias', $alias );
 	}
+
+	public function get_analytics_index_identifier() {
+		return "_analytics";
+	}
 }
 
 EP_Config::factory();
@@ -102,10 +110,18 @@ function ep_get_index_name( $blog_id = null ) {
 	return EP_Config::factory()->get_index_name( $blog_id );
 }
 
+function ep_get_analytics_index_name( $blog_id = null ) {
+	return EP_Config::factory()->get_analytics_index_name( $blog_id );
+}
+
 function ep_get_indexable_post_types() {
 	return EP_Config::factory()->get_indexable_post_types();
 }
 
 function ep_get_network_alias() {
 	return EP_Config::factory()->get_network_alias();
+}
+
+function ep_get_analytics_index_identifier() {
+	return EP_Config::factory()->get_analytics_index_identifier();
 }
